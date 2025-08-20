@@ -115,7 +115,10 @@ static s32 wl_cfg80211_set_tx_power(struct wiphy *wiphy,
            enum tx_power_setting type, s32 dbm);
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
+/* Kernel 6.14.0+ requires wireless_dev parameter and link_id for get_tx_power */
+static int wl_cfg80211_get_tx_power(struct wiphy *wiphy, struct wireless_dev *wdev, unsigned int link_id, int *dbm);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
 static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, struct wireless_dev *wdev, s32 *dbm);
 #else
 static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm);
@@ -1199,7 +1202,10 @@ wl_cfg80211_set_tx_power(struct wiphy *wiphy, enum tx_power_setting type, s32 db
 	return err;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
+/* Kernel 6.14.0+ requires wireless_dev parameter and link_id for get_tx_power */
+static int wl_cfg80211_get_tx_power(struct wiphy *wiphy, struct wireless_dev *wdev, unsigned int link_id, int *dbm)
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
 static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, struct wireless_dev *wdev, s32 *dbm)
 #else
 static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
@@ -1209,7 +1215,19 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
 	struct net_device *ndev = wl_to_ndev(wl);
 	s32 txpwrdbm;
 	u8 result;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
+	int err = 0;
+#else
 	s32 err = 0;
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
+	/* Kernel 6.14.0+ supports multiple links, but we only support link 0 for now */
+	if (link_id != 0) {
+		WL_ERR(("Unsupported link_id: %u (only link 0 supported)\n", link_id));
+		return -EINVAL;
+	}
+#endif
 
 	err = wl_dev_intvar_get(ndev, "qtxpower", &txpwrdbm);
 	if (err) {
@@ -1217,7 +1235,11 @@ static s32 wl_cfg80211_get_tx_power(struct wiphy *wiphy, s32 *dbm)
 		return err;
 	}
 	result = (u8) (txpwrdbm & ~WL_TXPWR_OVERRIDE);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 14, 0)
+	*dbm = (int) bcm_qdbm_to_mw(result);
+#else
 	*dbm = (s32) bcm_qdbm_to_mw(result);
+#endif
 
 	return err;
 }

@@ -32,7 +32,14 @@ This package includes security fixes that have been **directly applied** to the 
 - Adds comprehensive memory bounds validation for all IE operations
 - Implements safe destination buffer creation to avoid field-spanning writes
 
-### 4. Automated Installation (`install-with-fixes.sh`)
+### 4. Kernel 6.14.0+ Compatibility
+- Updated `wl_cfg80211_get_tx_power` function signature to include `wireless_dev` and `link_id` parameters
+- Changed return type from `s32` to `int` for kernel 6.14.0+
+- Added link_id validation (currently only supports link 0)
+- Maintains backward compatibility with older kernels
+- Follows latest cfg80211 API changes
+
+### 5. Automated Installation (`install-with-fixes.sh`)
 - Automatically detects kernel version
 - Verifies security fixes are in place
 - Builds and installs the driver with security fixes
@@ -101,6 +108,7 @@ These patches disable some compiler security features to ensure compatibility. T
 - **Kernels 2.6.x - 4.x**: No patches needed
 - **Kernels 5.x+**: Security patches automatically applied
 - **Kernels 6.x+**: Full compatibility with security fixes
+- **Kernel 6.14.0+**: Updated function signatures for `get_tx_power` (includes `link_id` parameter) and other cfg80211 operations
 
 ## Files Modified
 

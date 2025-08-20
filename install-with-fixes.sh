@@ -46,6 +46,12 @@ if [[ $KERNEL_MAJOR -ge 5 ]]; then
     else
         echo "✗ IE buffer safety checks not found - manual patch required"
     fi
+    
+    if grep -q "KERNEL_VERSION(6, 14, 0)" src/wl/sys/wl_cfg80211_hybrid.c; then
+        echo "✓ Kernel 6.14.0+ support enabled"
+    else
+        echo "✗ Kernel 6.14.0+ support not found - manual patch required"
+    fi
 else
     echo "Kernel version $KERNEL_VERSION doesn't require security patches"
 fi
