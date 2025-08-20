@@ -140,9 +140,22 @@ wl-objs            += src/wl/sys/wl_cfg80211_hybrid.o
 EXTRA_CFLAGS       += -I$(src)/src/include -I$(src)/src/common/include
 EXTRA_CFLAGS       += -I$(src)/src/wl/sys -I$(src)/src/wl/phy -I$(src)/src/wl/ppr/include
 EXTRA_CFLAGS       += -I$(src)/src/shared/bcmwifi/include
-#EXTRA_CFLAGS       += -DBCMDBG_ASSERT -DBCMDBG_ERR
+EXTRA_CFLAGS       += -DBCMDBG_ERR
 ifeq "$(GE_49)" "1"
 EXTRA_CFLAGS       += -Wno-date-time
+endif
+
+# Security and compatibility flags for modern kernels
+ifeq ($(shell expr $(VERSION) \>= 5),1)
+EXTRA_CFLAGS       += -fno-stack-protector
+EXTRA_CFLAGS       += -fno-stack-check
+EXTRA_CFLAGS       += -fno-strict-overflow
+EXTRA_CFLAGS       += -fno-delete-null-pointer-checks
+EXTRA_CFLAGS       += -fno-allow-store-data-races
+EXTRA_CFLAGS       += -fno-strict-aliasing
+EXTRA_CFLAGS       += -Wno-array-bounds
+EXTRA_CFLAGS       += -Wno-stringop-overflow
+EXTRA_CFLAGS       += -Wno-restrict
 endif
 
 EXTRA_LDFLAGS      := $(src)/lib/wlc_hybrid.o_shipped

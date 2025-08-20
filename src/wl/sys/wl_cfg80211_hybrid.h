@@ -87,7 +87,7 @@ do {										\
 #define WL_NUM_PMKIDS_MAX	MAXPMKID	
 #define WL_SCAN_BUF_BASE 		(16*1024)
 #define WL_TLV_INFO_MAX 		1024
-#define WL_BSS_INFO_MAX			2048
+#define WL_BSS_INFO_MAX			8048
 #define WL_ASSOC_INFO_MAX	512
 #define WL_IOCTL_LEN_MAX	2048
 #define WL_EXTRA_BUF_MAX	2048

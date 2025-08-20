@@ -1098,8 +1098,9 @@ wl_open(struct net_device *dev)
 	}
 	WL_UNLOCK(wl);
 
-	if (!error)
+	if (!error){
 		OLD_MOD_INC_USE_COUNT;
+	}
 
 #if defined(USE_CFG80211)
 	if (wl_cfg80211_up(dev)) {

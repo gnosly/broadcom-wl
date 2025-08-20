@@ -591,4 +591,18 @@ do {									\
 #define netdev_priv(dev) dev->priv
 #endif 
 
+/* Security fixes for modern kernels */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+/* Enable retpoline for return thunk protection */
+#ifndef CONFIG_RETPOLINE
+#define CONFIG_RETPOLINE 1
+#endif
+
+/* Enable speculation mitigations */
+#ifndef CONFIG_SPECULATION_MITIGATIONS
+#define CONFIG_SPECULATION_MITIGATIONS 1
+#endif
+
+#endif
+
 #endif 

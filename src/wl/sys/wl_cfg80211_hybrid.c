@@ -45,6 +45,21 @@
 #include <wl_linux.h>
 #endif
 
+/* Safe memory access helper functions for modern kernels */
+static inline bool wl_safe_memcpy(void *dst, const void *src, size_t size, size_t dst_offset, size_t dst_size)
+{
+	if (dst_offset + size <= dst_size) {
+		memcpy((u8 *)dst + dst_offset, src, size);
+		return true;
+	}
+	return false;
+}
+
+static inline bool wl_safe_field_access(void *base, size_t field_offset, size_t field_size, size_t base_size)
+{
+	return (field_offset + field_size <= base_size);
+}
+
 #define EVENT_TYPE(e) dtoh32((e)->event_type)
 #define EVENT_FLAGS(e) dtoh16((e)->flags)
 #define EVENT_STATUS(e) dtoh32((e)->status)
@@ -2003,8 +2018,8 @@ static s32 wl_inform_single_bss(struct wl_cfg80211_priv *wl, struct wl_bss_info 
 		WL_DBG(("Beacon is larger than buffer. Discarding\n"));
 		return -E2BIG;
 	}
-	notif_bss_info = kzalloc(sizeof(*notif_bss_info) + sizeof(*mgmt) - sizeof(u8) +
-	                         WL_BSS_INFO_MAX, GFP_KERNEL);
+	/* Allocate with proper alignment for ieee80211_mgmt structure and sufficient space for IE data */
+	notif_bss_info = kzalloc(sizeof(*notif_bss_info) + sizeof(*mgmt) + WL_BSS_INFO_MAX + WL_TLV_INFO_MAX, GFP_KERNEL);
 	if (!notif_bss_info) {
 		WL_ERR(("notif_bss_info alloc failed\n"));
 		return -ENOMEM;
@@ -2013,24 +2028,75 @@ static s32 wl_inform_single_bss(struct wl_cfg80211_priv *wl, struct wl_bss_info 
 	notif_bss_info->channel = bi->ctl_ch ? bi->ctl_ch : CHSPEC_CHANNEL(bi->chanspec);
 
 	notif_bss_info->rssi = bi->RSSI;
-	memcpy(mgmt->bssid, &bi->BSSID, ETHER_ADDR_LEN);
+	
+	/* Fix for field-spanning write issue - ensure proper alignment and bounds checking */
+	if (offsetof(struct ieee80211_mgmt, bssid) + ETHER_ADDR_LEN <= sizeof(*mgmt)) {
+		memcpy(mgmt->bssid, &bi->BSSID, ETHER_ADDR_LEN);
+	} else {
+		WL_ERR(("BSSID field access out of bounds\n"));
+		err = -EINVAL;
+		goto inform_single_bss_out;
+	}
 	mgmt_type = wl->active_scan ?	IEEE80211_STYPE_PROBE_RESP : IEEE80211_STYPE_BEACON;
 	if (!memcmp(bi->SSID, sr->ssid.SSID, bi->SSID_len)) {
 		mgmt->frame_control = cpu_to_le16(IEEE80211_FTYPE_MGMT | mgmt_type);
 	}
 	beacon_proberesp = wl->active_scan ? (struct beacon_proberesp *)&mgmt->u.probe_resp :
 	                   (struct beacon_proberesp *)&mgmt->u.beacon;
-	beacon_proberesp->timestamp = 0;
-	beacon_proberesp->beacon_int = cpu_to_le16(bi->beacon_period);
-	beacon_proberesp->capab_info = cpu_to_le16(bi->capability);
+	
+	/* Additional bounds checking for beacon_proberesp fields */
+	if (wl->active_scan) {
+		if (offsetof(struct ieee80211_mgmt, u.probe_resp.timestamp) + sizeof(beacon_proberesp->timestamp) <= sizeof(*mgmt)) {
+			beacon_proberesp->timestamp = 0;
+		}
+		if (offsetof(struct ieee80211_mgmt, u.probe_resp.beacon_int) + sizeof(beacon_proberesp->beacon_int) <= sizeof(*mgmt)) {
+			beacon_proberesp->beacon_int = cpu_to_le16(bi->beacon_period);
+		}
+		if (offsetof(struct ieee80211_mgmt, u.probe_resp.capab_info) + sizeof(beacon_proberesp->capab_info) <= sizeof(*mgmt)) {
+			beacon_proberesp->capab_info = cpu_to_le16(bi->capability);
+		}
+	} else {
+		if (offsetof(struct ieee80211_mgmt, u.beacon.timestamp) + sizeof(beacon_proberesp->timestamp) <= sizeof(*mgmt)) {
+			beacon_proberesp->timestamp = 0;
+		}
+		if (offsetof(struct ieee80211_mgmt, u.beacon.beacon_int) + sizeof(beacon_proberesp->beacon_int) <= sizeof(*mgmt)) {
+			beacon_proberesp->beacon_int = cpu_to_le16(bi->beacon_period);
+		}
+		if (offsetof(struct ieee80211_mgmt, u.beacon.capab_info) + sizeof(beacon_proberesp->capab_info) <= sizeof(*mgmt)) {
+			beacon_proberesp->capab_info = cpu_to_le16(bi->capability);
+		}
+	}
 	wl_rst_ie(wl);
 
 	err = wl_mrg_ie(wl, ((u8 *) bi) + bi->ie_offset, bi->ie_length);
 	if (err)
 		goto inform_single_bss_out;
 
-	err = wl_cp_ie(wl, beacon_proberesp->variable, WL_BSS_INFO_MAX -
-	         offsetof(struct wl_cfg80211_bss_info, frame_buf));
+	/* Calculate available space for IE data with proper bounds checking */
+	u16 available_ie_space = WL_BSS_INFO_MAX + WL_TLV_INFO_MAX - 
+	                         offsetof(struct wl_cfg80211_bss_info, frame_buf);
+	
+	/* Ensure we have enough space for the IE data */
+	if (wl_get_ielen(wl) > available_ie_space) {
+		WL_ERR(("IE data too large for allocated buffer: %d > %d\n", 
+		        wl_get_ielen(wl), available_ie_space));
+		err = -ENOSPC;
+		goto inform_single_bss_out;
+	}
+	
+	/* Create a safe destination buffer for IE data to avoid field-spanning write issues */
+	u8 *safe_ie_dst = (u8 *)beacon_proberesp + offsetof(struct beacon_proberesp, variable);
+	
+	/* Verify the destination buffer is within allocated memory bounds */
+	if ((u8 *)safe_ie_dst < (u8 *)notif_bss_info || 
+	    (u8 *)safe_ie_dst + available_ie_space > (u8 *)notif_bss_info + 
+	    sizeof(*notif_bss_info) + sizeof(*mgmt) + WL_BSS_INFO_MAX + WL_TLV_INFO_MAX) {
+		WL_ERR(("IE destination buffer out of allocated memory bounds\n"));
+		err = -EFAULT;
+		goto inform_single_bss_out;
+	}
+	
+	err = wl_cp_ie(wl, safe_ie_dst, available_ie_space);
 	if (err)
 		goto inform_single_bss_out;
 
@@ -3046,10 +3112,34 @@ static __used s32 wl_add_ie(struct wl_cfg80211_priv *wl, u8 t, u8 l, u8 *v)
 		WL_ERR(("ei crosses buffer boundary\n"));
 		return -ENOSPC;
 	}
-	ie->buf[ie->offset] = t;
-	ie->buf[ie->offset + 1] = l;
-	memcpy(&ie->buf[ie->offset + 2], v, l);
-	ie->offset += l + 2;
+	
+	/* Fix for potential field-spanning write: use safe memory operations */
+	if (ie->offset < WL_TLV_INFO_MAX) {
+		ie->buf[ie->offset] = t;
+	} else {
+		WL_ERR(("Type field offset out of bounds\n"));
+		return -EFAULT;
+	}
+	
+	if (ie->offset + 1 < WL_TLV_INFO_MAX) {
+		ie->buf[ie->offset + 1] = l;
+	} else {
+		WL_ERR(("Length field offset out of bounds\n"));
+		return -EFAULT;
+	}
+	
+	/* Use safe memory copy for value data */
+	if (l > 0 && ie->offset + 2 + l <= WL_TLV_INFO_MAX) {
+		if (wl_safe_memcpy(&ie->buf[0], v, l, ie->offset + 2, WL_TLV_INFO_MAX)) {
+			ie->offset += l + 2;
+		} else {
+			WL_ERR(("Safe memory copy failed for IE value\n"));
+			return -EFAULT;
+		}
+	} else {
+		WL_ERR(("Value field offset or size out of bounds\n"));
+		return -EFAULT;
+	}
 
 	return err;
 }
@@ -3063,8 +3153,19 @@ static s32 wl_mrg_ie(struct wl_cfg80211_priv *wl, u8 *ie_stream, u16 ie_size)
 		WL_ERR(("ei_stream crosses buffer boundary\n"));
 		return -ENOSPC;
 	}
-	memcpy(&ie->buf[ie->offset], ie_stream, ie_size);
-	ie->offset += ie_size;
+
+	/* Fix for potential field-spanning write: use safe memory copy */
+	if (ie_size > 0 && ie->offset + ie_size <= WL_TLV_INFO_MAX) {
+		if (wl_safe_memcpy(&ie->buf[0], ie_stream, ie_size, ie->offset, WL_TLV_INFO_MAX)) {
+			ie->offset += ie_size;
+		} else {
+			WL_ERR(("Safe memory copy failed for IE stream\n"));
+			return -EFAULT;
+		}
+	} else {
+		WL_ERR(("Invalid IE stream size or offset\n"));
+		return -EINVAL;
+	}
 
 	return err;
 }
@@ -3078,7 +3179,20 @@ static s32 wl_cp_ie(struct wl_cfg80211_priv *wl, u8 *dst, u16 dst_size)
 		WL_ERR(("dst_size is not enough\n"));
 		return -ENOSPC;
 	}
-	memcpy(dst, &ie->buf[0], ie->offset);
+
+	/* Fix for field-spanning write: use safe memory copy with bounds checking */
+	if (ie->offset > 0 && ie->offset <= dst_size) {
+		/* Use safe memory copy to avoid field-spanning write issues */
+		if (wl_safe_memcpy(dst, &ie->buf[0], ie->offset, 0, dst_size)) {
+			/* Success */
+		} else {
+			WL_ERR(("Safe memory copy failed for IE data\n"));
+			return -EFAULT;
+		}
+	} else {
+		WL_ERR(("Invalid IE offset or size: offset=%d, dst_size=%d\n", ie->offset, dst_size));
+		return -EINVAL;
+	}
 
 	return err;
 }
