@@ -36,6 +36,6 @@
 
 #define EPI_VERSION_DEV		6.30.223
 
-#define	EPI_VERSION_STR		"6.30.223.271 (r587334)"
+#define	EPI_VERSION_STR		"6.30.223.273 (r587334)"
 
 #endif 
